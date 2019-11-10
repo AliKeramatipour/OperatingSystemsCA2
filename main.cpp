@@ -84,48 +84,87 @@ void childProcess(int id, int readByteCount)
     }
     
     string childToVoter = "/tmp/file_" + to_string(id) + ".txt";
-    char STRINGTEST[30] ; 
-    STRINGTEST[childToVoter.size()] = 0;
-    for ( int i = 0 ; i < childToVoter.size() ; i++ )
-    {
-        STRINGTEST[i] = childToVoter[i];
-    }
-    int retVAL = mkfifo(STRINGTEST, 0666); 
-    cout << "RET:" << retVAL << endl;
-    cout << "WTFFFF1" << childToVoter << endl ;
-    int namedPipe = open(STRINGTEST,O_WRONLY) ;
-    cout << "WTFFFF2" << endl ;
+    mkfifo(childToVoter.c_str(), 0666); 
+    int namedPipe = open(childToVoter.c_str(), O_WRONLY) ;
     for ( int i = 0 ; i < bestClassifierForDataset.size() ; i++ )
     {
-        string temp = to_string(bestClassifierForDataset[i]) + "";
+        string temp = to_string(bestClassifierForDataset[i]) + ",";
         write(namedPipe, temp.c_str(), temp.size());
     }
     close(namedPipe);
-    cout << "WTFFFF " << endl ;
     return;
 }
 
 void voter(int classifierCount)
 {
     cout << " here voter " << endl ;
+    string passPID = "/tmp/PIDs";
+    mkfifo(passPID.c_str(), 0666); 
+    int getPID = open(passPID.c_str(), O_RDONLY);
+    int readPIDCount = 0;
+    vector<int> PIDs;
+    while ( readPIDCount != classifierCount )
+    {
+        char temp;
+        string saveBuf;
+        while ( read(getPID, &temp , 1) )
+        {
+            if ( temp == ',' ) break;
+            saveBuf.push_back(temp);
+        }
+        PIDs.push_back(stoi(saveBuf));
+        readPIDCount++;
+    }
+
+    vector<int> namedPipeVec;
     for (int i = 0 ; i < classifierCount ; i++)
     {
-        string childDataDir = "/tmp/" + to_string(i);
-        int namedPipe = open(childDataDir.c_str(), O_RDONLY) ;
-        char data;
-        vector<int> votes;
-        string temp;
-        while (read(namedPipe, &data, 1)){
-            if ( data == '\n' )
+        string childPipe = "/tmp/file_" + to_string(i) + ".txt";
+        mkfifo(childPipe.c_str(), 0666);
+        int namedPipe = open(childPipe.c_str(), O_RDONLY) ;
+        namedPipeVec.push_back(namedPipe);
+    }
+
+    for ( int i = 0 ; i < PIDs.size() ; i++ )
+        wait(&(PIDs[i]));
+    vector< vector<int> > sample_classCount; 
+    for ( int i = 0 ; i < classifierCount ; i++ )
+    {
+        char temp;
+        string saveBuf;
+        int namedPipe = namedPipeVec[i];
+        int cntSample = 0;
+        while ( read(namedPipe, &temp , 1) )
+        {
+            if ( temp == ',' )
             {
-                reverse(temp.begin(), temp.end() );
-                votes.push_back(stoi(temp));
-                cout << temp << endl;
-                continue;
+                while( sample_classCount.size() <= cntSample )
+                {
+                    vector<int> EMPTY_VEC;
+                    sample_classCount.push_back(EMPTY_VEC);
+                }
+
+                int ans = stoi(saveBuf);
+
+                while ( sample_classCount[cntSample].size() <= ans )
+                    sample_classCount[cntSample].push_back(0);
+                
+                sample_classCount[cntSample][ans]++;
+                saveBuf.clear();
             }
-            temp.push_back(data);
+            saveBuf.push_back(temp);
         }
-        close(namedPipe);
+    }
+
+    vector<int> finalResult;
+
+    for ( int i = 0 ; i < sample_classCount.size() ; i++ )
+    {
+        int mx = -1 , ID = -1;
+        for ( int j = 0 ; j < sample_classCount[i].size() ; j++ )
+            if ( mx < sample_classCount[i][j] )
+                mx = sample_classCount[i][j], ID = j;
+        finalResult.push_back(ID);
     }
 }
 
@@ -161,18 +200,29 @@ int main(int argc, char *argv[]) {
             break;
     }
     if ( isChildProcess ){
+        cout << "child process starting:" << i << endl;
         childProcess(i,csvFile.size());
         cout << "child process ending:" << i << endl;
         return 0;
     }
     
-    for ( int i = 0 ; i < childProcessPIDs.size() ; i++ )
-        wait(&(childProcessPIDs[i]));
-    
+    cout << "MAIN REACHED HERE?" << endl ;
     int fork_res = fork();
     if ( fork_res == 0 )
     {
         voter(i);
+    } else {
+        string passPID = "/tmp/PIDs";
+        mkfifo(passPID.c_str(), 0666); 
+        int sendPID = open(passPID.c_str(), O_WRONLY);
+        for ( int j = 0 ; j < i ; j++ )
+        {
+            string temp = to_string(childProcessPIDs[j]) + ",";
+            write(sendPID, temp.c_str(), temp.size() );
+        }
+            
     }
+
+
 	return 0;
 }
