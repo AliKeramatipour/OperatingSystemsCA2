@@ -10,8 +10,6 @@
 
 using namespace std;
 
-typedef pair<float,pair<float,float> > floatTriplePair ;
-
 const int MAX_pipes = 100;
 const int MAX_filename = 100;
 const int INF = 1e8;
@@ -29,18 +27,18 @@ void childProcess(int id, int readByteCount)
 
     string readInput;
     classifierFile >> readInput;
-    vector<vector<float> > classifier;
+    vector<vector<long double> > classifier;
     while ( classifierFile >> readInput )
     {
         readInput.push_back(',');
         int last = 0;
-        vector<float> tempVector;
+        vector<long double> tempVector;
         for (int i = 0 ; i < readInput.length() ; i++)
             if ( readInput[i] == ',')
             {
                 string first = readInput.substr(last,i - last);
                 last = i + 1;
-                tempVector.push_back(stof(first));
+                tempVector.push_back(stold(first));
             }
         classifier.push_back(tempVector);
     }
@@ -48,35 +46,35 @@ void childProcess(int id, int readByteCount)
     
     ifstream datasetFile;
     datasetFile.open(d1 + "/dataset.csv");
-    vector<vector<float> > dataset;
+    vector<vector<long double> > dataset;
     datasetFile >> readInput ;
     while ( datasetFile >> readInput )
     {
         readInput.push_back(',');
-        vector<float> descriptor;
+        vector<long double> descriptor;
         int last = 0;
         for (int i = 0 ; i < readInput.length() ; i++)
             if ( readInput[i] == ',')
             {
                 string first = readInput.substr(last,i - last);
                 last = i + 1;
-                descriptor.push_back(stof(first));
+                descriptor.push_back(stold(first));
             }
+        if ( descriptor.size() != 2 )
+            cout << "dsize:" << descriptor.size() << endl ;
         dataset.push_back(descriptor);
     }
     datasetFile.close();
     vector<int> bestClassifierForDataset;
-
-    cout << classifier.size() << endl ;
     for ( int i = 0 ; i < dataset.size() ; i++ )
     {
-        int length = dataset[i][0] , width = dataset[i][1] ;
+        long double length = dataset[i][0] , width = dataset[i][1] ;
         int label = -1;
-        float maxInnerProduct = -INF;
+        long double maxInnerProduct = -INF;
         for ( int j = 0 ; j < classifier.size() ; j++ )
         {
-            float b0 = classifier[j][0], b1 = classifier[j][1], bias = classifier[j][2];
-            float innerProduct = b0 * length + b1 * width + bias;
+            long double b0 = classifier[j][0], b1 = classifier[j][1], bias = classifier[j][2];
+            long double innerProduct = b0 * length + b1 * width + bias;
             if ( innerProduct > maxInnerProduct )
                 maxInnerProduct = innerProduct , label = j;
         }
@@ -84,20 +82,20 @@ void childProcess(int id, int readByteCount)
     }
     
     string childToVoter = "/tmp/file_" + to_string(id) + ".txt";
+    
     mkfifo(childToVoter.c_str(), 0666); 
     int namedPipe = open(childToVoter.c_str(), O_WRONLY) ;
+    string FINALWRITTEN;
     for ( int i = 0 ; i < bestClassifierForDataset.size() ; i++ )
-    {
-        string temp = to_string(bestClassifierForDataset[i]) + ",";
-        write(namedPipe, temp.c_str(), temp.size());
-    }
+        FINALWRITTEN += to_string(bestClassifierForDataset[i]) + ",";
+    
+    write(namedPipe, FINALWRITTEN.c_str(), FINALWRITTEN.size());
     close(namedPipe);
     return;
 }
 
 void voter(int classifierCount)
 {
-    cout << " here voter " << endl ;
     string passPID = "/tmp/PIDs";
     mkfifo(passPID.c_str(), 0666); 
     int getPID = open(passPID.c_str(), O_RDONLY);
@@ -124,9 +122,11 @@ void voter(int classifierCount)
         int namedPipe = open(childPipe.c_str(), O_RDONLY) ;
         namedPipeVec.push_back(namedPipe);
     }
+    
 
     for ( int i = 0 ; i < PIDs.size() ; i++ )
         wait(&(PIDs[i]));
+    
     vector< vector<int> > sample_classCount; 
     for ( int i = 0 ; i < classifierCount ; i++ )
     {
@@ -143,28 +143,35 @@ void voter(int classifierCount)
                     vector<int> EMPTY_VEC;
                     sample_classCount.push_back(EMPTY_VEC);
                 }
-
                 int ans = stoi(saveBuf);
-
                 while ( sample_classCount[cntSample].size() <= ans )
                     sample_classCount[cntSample].push_back(0);
                 
                 sample_classCount[cntSample][ans]++;
                 saveBuf.clear();
+                cntSample++;
+                continue;
             }
             saveBuf.push_back(temp);
         }
     }
 
-    vector<int> finalResult;
-
+    vector<string> finalResult;
     for ( int i = 0 ; i < sample_classCount.size() ; i++ )
     {
         int mx = -1 , ID = -1;
         for ( int j = 0 ; j < sample_classCount[i].size() ; j++ )
             if ( mx < sample_classCount[i][j] )
                 mx = sample_classCount[i][j], ID = j;
-        finalResult.push_back(ID);
+        finalResult.push_back(to_string(ID) + ",");
+    }
+    string resDir = "/tmp/results";
+    mkfifo(resDir.c_str(), 0666);
+    int sendRes = open(resDir.c_str(), O_WRONLY);
+
+    for ( int i = 0 ; i < finalResult.size() ; i++ )
+    {
+        write(sendRes, finalResult[i].c_str(), finalResult[i].size());
     }
 }
 
@@ -199,29 +206,74 @@ int main(int argc, char *argv[]) {
         else 
             break;
     }
+    
     if ( isChildProcess ){
-        cout << "child process starting:" << i << endl;
+        //cout << "child process starting:" << i << endl;
         childProcess(i,csvFile.size());
-        cout << "child process ending:" << i << endl;
+        //cout << "child process ending:" << i << endl;
         return 0;
     }
     
-    cout << "MAIN REACHED HERE?" << endl ;
+    
+    
     int fork_res = fork();
     if ( fork_res == 0 )
     {
         voter(i);
-    } else {
-        string passPID = "/tmp/PIDs";
-        mkfifo(passPID.c_str(), 0666); 
-        int sendPID = open(passPID.c_str(), O_WRONLY);
-        for ( int j = 0 ; j < i ; j++ )
-        {
-            string temp = to_string(childProcessPIDs[j]) + ",";
-            write(sendPID, temp.c_str(), temp.size() );
-        }
-            
+        return 0 ;
     }
+
+    string passPID = "/tmp/PIDs";
+    mkfifo(passPID.c_str(), 0666); 
+    int sendPID = open(passPID.c_str(), O_WRONLY);
+    for ( int j = 0 ; j < i ; j++ )
+    {
+        string temp = to_string(childProcessPIDs[j]) + ",";
+        write(sendPID, temp.c_str(), temp.size() );
+    }
+        
+    string resDir = "/tmp/results";
+    mkfifo(resDir.c_str(), 0666);
+    int getRes = open(resDir.c_str(), O_RDONLY);
+    wait(&fork_res);
+
+    char temp;
+    string saveBuf;
+    vector<int> results;
+    
+    while ( read(getRes, &temp , 1) )
+    {
+        if ( temp == ',' )
+        {   
+            int ans = stoi(saveBuf);
+            results.push_back(ans);
+            saveBuf.clear();
+            continue;
+        }
+        saveBuf.push_back(temp);
+    }
+
+    ifstream labelFile;
+    labelFile.open(d1 + "/labels.csv");
+
+    int trueRes = 0 ;
+    int someInput;
+    vector<int> labelAns;
+
+    string tempString;
+    labelFile >> tempString;
+    labelFile >> tempString;
+    while ( labelFile >> someInput )
+        labelAns.push_back(someInput);
+    
+    
+
+    for ( int i = 0 ; i < results.size() ; i++ )
+    {
+        if ( labelAns[i] == results[i] )
+            trueRes++;
+    }
+    cout << "Accuracy:" << (long double)trueRes * 100 /results.size() << "%" << endl ;
 
 
 	return 0;
